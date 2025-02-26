@@ -261,24 +261,24 @@ export default function Game() {
   }, []);
 
   useEffect(() => {
-    // 阻止默认的触摸行为
+    // 只在游戏进行时阻止默认触摸行为
     const preventDefault = (e: Event) => {
-      e.preventDefault();
-      e.stopPropagation();
+      if (gameState === 'playing') {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     };
 
-    // 添加触摸事件监听器，设置 passive: false 来允许阻止默认行为
     document.addEventListener('touchstart', preventDefault, { passive: false });
     document.addEventListener('touchmove', preventDefault, { passive: false });
     document.addEventListener('touchend', preventDefault, { passive: false });
     
-    // 清理函数
     return () => {
       document.removeEventListener('touchstart', preventDefault);
       document.removeEventListener('touchmove', preventDefault);
       document.removeEventListener('touchend', preventDefault);
     };
-  }, []);
+  }, [gameState]);
 
   useEffect(() => {
     window.addEventListener('keydown', movePlayer);
@@ -898,8 +898,9 @@ export default function Game() {
 
   return (
     <div 
-      className="relative w-full h-screen bg-gradient-to-b from-gray-900 via-blue-900 to-black overflow-hidden touch-none select-none"
-      style={{ WebkitTouchCallout: 'none' }}
+      className={`relative w-full h-screen bg-gradient-to-b from-gray-900 via-blue-900 to-black overflow-hidden
+        ${gameState === 'playing' ? 'touch-none select-none' : ''}`}
+      style={gameState === 'playing' ? { WebkitTouchCallout: 'none' } : undefined}
     >
       <div className="absolute top-4 left-4 text-white space-y-2 bg-gray-800/50 p-4 rounded-lg backdrop-blur-sm">
         <div className="text-xl">{t.stats.score}: {score}</div>
