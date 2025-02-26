@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, memo, useMemo } from 'react';
 import { Rocket, Star, Zap, Shield, Target, Skull, Ghost, Bomb, Crown, Heart } from 'lucide-react';
 
 interface Position {
@@ -22,6 +22,7 @@ interface EnemyBullet extends Position {
   id: number;
   type: 'normal' | 'explosive' | 'homing';
   damage: number;
+  createdAt: number;
 }
 
 interface PlayerStats {
@@ -66,6 +67,11 @@ interface Language {
     finalScore: string;
     level: string;
     restart: string;
+    reasons: {
+      health: string;
+      collision: string;
+      invasion: string;
+    };
   };
 }
 
@@ -75,7 +81,7 @@ const languages: { en: Language; zh: Language } = {
     start: "Start Game",
     controls: {
       move: "Use ← → keys to move",
-      shoot: "Press Space to shoot",
+      shoot: "Auto-shooting enabled",
       upgrade: "Use points to upgrade",
     },
     enemies: {
@@ -104,6 +110,11 @@ const languages: { en: Language; zh: Language } = {
       finalScore: "Final Score",
       level: "Level Reached",
       restart: "Play Again",
+      reasons: {
+        health: "Your ship was destroyed!",
+        collision: "Crashed into enemy!",
+        invasion: "Enemies reached Earth!"
+      }
     },
   },
   zh: {
@@ -111,7 +122,7 @@ const languages: { en: Language; zh: Language } = {
     start: "开始游戏",
     controls: {
       move: "使用 ← → 键移动飞船",
-      shoot: "按空格键发射子弹",
+      shoot: "自动射击已启用",
       upgrade: "使用升级点数强化飞船",
     },
     enemies: {
@@ -140,9 +151,25 @@ const languages: { en: Language; zh: Language } = {
       finalScore: "最终得分",
       level: "到达关卡",
       restart: "再来一局",
+      reasons: {
+        health: "飞船被摧毁了！",
+        collision: "撞上敌机！",
+        invasion: "敌人入侵地球！"
+      }
     },
   },
 };
+
+const debounce = (func: Function, wait: number) => {
+  let timeout: NodeJS.Timeout;
+  return (...args: any[]) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+};
+
+// 1. 添加游戏结束原因类型
+type GameOverReason = 'health' | 'collision' | 'invasion' | null;
 
 export default function Game() {
   const [lang, setLang] = useState<'en' | 'zh'>('en');
@@ -168,6 +195,21 @@ export default function Game() {
   });
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   const [isShooting, setIsShooting] = useState(false);
+  const [lastEnemySpawn, setLastEnemySpawn] = useState(0);
+  const [enemySpawnRate, setEnemySpawnRate] = useState(1000);
+  const [powerUps, setPowerUps] = useState<PowerUp[]>([]);
+  const [activeEffects, setActiveEffects] = useState<{
+    shield: boolean;
+    damage: number;
+    speed: number;
+  }>({
+    shield: false,
+    damage: 0,
+    speed: 0,
+  });
+  const [isHurt, setIsHurt] = useState(false);
+  // 2. 添加状态来存储游戏结束原因
+  const [gameOverReason, setGameOverReason] = useState<GameOverReason>(null);
 
   const movePlayer = useCallback((e: KeyboardEvent) => {
     if (gameState !== 'playing') return;
@@ -185,21 +227,7 @@ export default function Game() {
       
       return { ...prev, x: newX };
     });
-
-    if (e.code === 'Space') {
-      const now = Date.now();
-      if (now - lastShot >= playerStats.fireRate) {
-        setBullets(prev => [...prev, { 
-          id: bulletId, 
-          x: playerPosition.x + 2, 
-          y: playerPosition.y,
-          damage: playerStats.damage
-        }]);
-        setBulletId(prev => prev + 1);
-        setLastShot(now);
-      }
-    }
-  }, [bulletId, gameState, lastShot, playerPosition.x, playerPosition.y, playerStats]);
+  }, [gameState, playerStats.speed]);
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
     if (gameState !== 'playing') return;
@@ -212,38 +240,54 @@ export default function Game() {
   }, [gameState]);
 
   const handleTouchMove = useCallback((e: TouchEvent) => {
-    if (gameState !== 'playing' || touchStartX === null) return;
+    if (gameState !== 'playing') return;
     
     const touch = e.touches[0];
-    const moveX = touch.clientX - touchStartX;
-    const sensitivity = window.innerWidth / 100; // 将屏幕宽度划分为100份
+    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    const x = ((touch.clientX - rect.left) / rect.width) * 100;
     
-    setPlayerPosition(prev => {
-      const newX = Math.max(0, Math.min(90, prev.x + (moveX / sensitivity)));
-      return { ...prev, x: newX };
-    });
-    
-    setTouchStartX(touch.clientX);
-  }, [gameState, touchStartX]);
+    setPlayerPosition(prev => ({
+      ...prev,
+      x: Math.max(0, Math.min(90, x))
+    }));
+  }, [gameState]);
 
   const handleTouchEnd = useCallback(() => {
     setTouchStartX(null);
     setIsShooting(false);
   }, []);
 
+  const debouncedTouchMove = useMemo(
+    () => debounce((e: TouchEvent) => {
+      if (gameState !== 'playing') return;
+      
+      const touch = e.touches[0];
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      const x = ((touch.clientX - rect.left) / rect.width) * 100;
+      
+      setPlayerPosition(prev => ({
+        ...prev,
+        x: Math.max(0, Math.min(90, x))
+      }));
+    }, 16), // 约60fps
+    [gameState]
+  );
+
   useEffect(() => {
     window.addEventListener('keydown', movePlayer);
     window.addEventListener('touchstart', handleTouchStart);
     window.addEventListener('touchmove', handleTouchMove);
     window.addEventListener('touchend', handleTouchEnd);
+    document.addEventListener('touchmove', debouncedTouchMove);
     
     return () => {
       window.removeEventListener('keydown', movePlayer);
       window.removeEventListener('touchstart', handleTouchStart);
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleTouchEnd);
+      document.removeEventListener('touchmove', debouncedTouchMove);
     };
-  }, [movePlayer, handleTouchStart, handleTouchMove, handleTouchEnd]);
+  }, [movePlayer, handleTouchStart, handleTouchMove, handleTouchEnd, debouncedTouchMove]);
 
   useEffect(() => {
     if (gameState !== 'playing') return;
@@ -271,7 +315,16 @@ export default function Game() {
           }
 
           return { ...bullet, x: newX, y: newY };
-        }).filter(bullet => bullet.y < 100)
+        }).filter(bullet => {
+          const now = Date.now();
+          return (
+            bullet.y < 100 && 
+            bullet.y > 0 && 
+            bullet.x >= 0 && 
+            bullet.x <= 100 && 
+            now - bullet.createdAt <= 3000
+          );
+        })
       );
 
       // Move enemies and handle enemy shooting
@@ -298,40 +351,44 @@ export default function Game() {
           }
 
           // Enemy shooting
-          if (Math.random() < 0.02) {
+          if (Math.random() < 0.01 && enemy.y > 0 && enemy.y < 70) {
             const bulletBase = {
-              id: Math.random(),
+              id: generateBulletId(),
               x: enemy.x,
               y: enemy.y + 5,
+              createdAt: Date.now(),
             };
 
             switch (enemy.bulletPattern) {
               case 'straight':
-                setEnemyBullets(bullets => [...bullets, {
+                setEnemyBullets(bullets => [...bullets.slice(-50), {
                   ...bulletBase,
                   type: 'normal',
                   damage: 1,
                 }]);
                 break;
               case 'spread':
-                [-1, 0, 1].forEach(offset => {
-                  setEnemyBullets(bullets => [...bullets, {
-                    ...bulletBase,
-                    x: enemy.x + offset * 5,
-                    type: 'normal',
-                    damage: 1,
-                  }]);
+                [-1, 0, 1].forEach((offset, index) => {
+                  setTimeout(() => {
+                    setEnemyBullets(bullets => [...bullets.slice(-50), {
+                      ...bulletBase,
+                      id: generateBulletId(),
+                      x: enemy.x + offset * 5,
+                      type: 'normal',
+                      damage: 1,
+                    }]);
+                  }, index * 50);
                 });
                 break;
               case 'explosive':
-                setEnemyBullets(bullets => [...bullets, {
+                setEnemyBullets(bullets => [...bullets.slice(-50), {
                   ...bulletBase,
                   type: 'explosive',
                   damage: 2,
                 }]);
                 break;
               case 'homing':
-                setEnemyBullets(bullets => [...bullets, {
+                setEnemyBullets(bullets => [...bullets.slice(-50), {
                   ...bulletBase,
                   type: 'homing',
                   damage: 1,
@@ -346,11 +403,12 @@ export default function Game() {
             y: enemy.y + ySpeed,
           };
         });
-        return newEnemies.filter(enemy => enemy.y < 100);
+        return newEnemies.filter(enemy => enemy.y < 100 && enemy.y > -20);
       });
 
       // Spawn enemies
-      if (Math.random() < 0.02 + (level * 0.01)) {
+      const now = Date.now();
+      if (now - lastEnemySpawn >= enemySpawnRate) {
         const enemyTypes: Enemy['type'][] = ['scout', 'speeder', 'boss', 'bomber', 'elite'];
         const availableTypes = enemyTypes.slice(0, Math.min(2 + Math.floor(level / 2), enemyTypes.length));
         const randomType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
@@ -366,7 +424,7 @@ export default function Game() {
         setEnemies(prev => [
           ...prev,
           { 
-            id: enemyId, 
+            id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             x: Math.random() * 90, 
             y: -10,
             health: randomType === 'scout' ? Math.ceil(level / 2) :
@@ -378,7 +436,7 @@ export default function Game() {
             bulletPattern: bulletPatterns[randomType],
           }
         ]);
-        setEnemyId(prev => prev + 1);
+        setLastEnemySpawn(now);
       }
 
       // Check collisions between player bullets and enemies
@@ -428,7 +486,7 @@ export default function Game() {
             setPlayerStats(prev => {
               const newHealth = prev.health - bullet.damage;
               if (newHealth <= 0) {
-                setGameState('gameover');
+                handleGameOver('health');
               }
               return { ...prev, health: Math.max(0, newHealth) };
             });
@@ -445,17 +503,17 @@ export default function Game() {
       // Check game over from enemies reaching bottom
       setEnemies(prev => {
         if (prev.some(enemy => enemy.y > 80)) {
-          setGameState('gameover');
+          handleGameOver('invasion');
         }
         return prev;
       });
     }, 50);
 
     return () => clearInterval(gameLoop);
-  }, [enemyId, gameState, level, playerPosition.x, playerPosition.y]);
+  }, [enemyId, gameState, level, playerPosition.x, playerPosition.y, lastEnemySpawn, enemySpawnRate]);
 
   useEffect(() => {
-    if (!isShooting || gameState !== 'playing') return;
+    if (gameState !== 'playing') return;
     
     const shootingInterval = setInterval(() => {
       const now = Date.now();
@@ -472,9 +530,107 @@ export default function Game() {
     }, 50);
     
     return () => clearInterval(shootingInterval);
-  }, [isShooting, gameState, lastShot, bulletId, playerPosition.x, playerPosition.y, playerStats]);
+  }, [gameState, lastShot, bulletId, playerPosition.x, playerPosition.y, playerStats]);
 
-  const startGame = () => {
+  // 1. 先声明 handleGameOver 函数
+  const handleGameOver = useCallback((reason: GameOverReason) => {
+    setGameState('gameover');
+    setGameOverReason(reason);
+    // 清理所有游戏对象
+    setEnemies([]);
+    setEnemyBullets([]);
+    setBullets([]);
+    setPowerUps([]);
+  }, []);
+
+  // 2. 然后是 handlePlayerHit 函数
+  const handlePlayerHit = useCallback((damage: number) => {
+    setIsHurt(true);
+    setPlayerStats(prev => ({
+      ...prev,
+      health: prev.health - damage
+    }));
+    
+    setTimeout(() => setIsHurt(false), 200);
+    
+    if (playerStats.health <= damage) {
+      handleGameOver('health');
+    }
+  }, [playerStats.health, handleGameOver]);
+
+  // 3. 碰撞检测函数
+  const checkPlayerCollision = useCallback((bullet: EnemyBullet) => {
+    if (activeEffects.shield) return false;
+    
+    const playerRect = {
+      left: playerPosition.x - 3,
+      right: playerPosition.x + 3,
+      top: playerPosition.y - 3,
+      bottom: playerPosition.y + 3
+    };
+    
+    const bulletRect = {
+      left: bullet.x - 0.5,
+      right: bullet.x + 0.5,
+      top: bullet.y - 1.5,
+      bottom: bullet.y + 1.5
+    };
+    
+    return !(
+      bulletRect.right < playerRect.left ||
+      bulletRect.left > playerRect.right ||
+      bulletRect.bottom < playerRect.top ||
+      bulletRect.top > playerRect.bottom
+    );
+  }, [playerPosition.x, playerPosition.y, activeEffects.shield]);
+
+  // 4. 修改游戏循环中的碰撞检测
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    const gameLoop = setInterval(() => {
+      // 检测玩家是否被击中
+      setEnemyBullets(prev => {
+        const remainingBullets = prev.filter(bullet => {
+          const hit = checkPlayerCollision(bullet);
+          if (hit) {
+            handlePlayerHit(bullet.damage);
+            return false;
+          }
+          return true;
+        });
+        return remainingBullets;
+      });
+
+      // 检测敌人碰撞
+      setEnemies(prev => {
+        const remainingEnemies = prev.filter(enemy => {
+          const collision = Math.abs(enemy.x - playerPosition.x) < 5 && 
+                          Math.abs(enemy.y - playerPosition.y) < 5;
+          if (collision) {
+            handlePlayerHit(2);
+            handleGameOver('collision');
+            return false;
+          }
+          return true;
+        });
+        return remainingEnemies;
+      });
+
+      // 检测敌人入侵
+      setEnemies(prev => {
+        if (prev.some(enemy => enemy.y > 80)) {
+          handleGameOver('invasion');
+        }
+        return prev;
+      });
+    }, 50);
+
+    return () => clearInterval(gameLoop);
+  }, [gameState, checkPlayerCollision, handlePlayerHit, handleGameOver]);
+
+  // 5. 修改 startGame 函数
+  const startGame = useCallback(() => {
     setGameState('playing');
     setScore(0);
     setLevel(1);
@@ -482,6 +638,8 @@ export default function Game() {
     setBullets([]);
     setEnemies([]);
     setEnemyBullets([]);
+    setPowerUps([]);
+    setGameOverReason(null);
     setPlayerPosition({ x: 50, y: 80 });
     setPlayerStats({
       fireRate: 500,
@@ -490,7 +648,11 @@ export default function Game() {
       health: 10,
       maxHealth: 10,
     });
-  };
+    setLastShot(0);
+    setLastEnemySpawn(0);
+    setBulletId(0);
+    setEnemyId(0);
+  }, []);
 
   const upgrade = (stat: keyof PlayerStats) => {
     if (points < 1) return;
@@ -508,11 +670,172 @@ export default function Game() {
 
   const getEnemyIcon = (type: Enemy['type']) => {
     switch (type) {
-      case 'scout': return <Star className="animate-pulse" size={24} />;
-      case 'speeder': return <Ghost className="animate-bounce" size={24} />;
-      case 'boss': return <Skull className="animate-pulse" size={32} />;
-      case 'bomber': return <Bomb className="animate-bounce" size={28} />;
-      case 'elite': return <Crown className="animate-pulse" size={28} />;
+      case 'scout': 
+        return (
+          <div className="relative">
+            <Star className="text-red-500 animate-pulse absolute" size={24} />
+            <Star className="text-yellow-400 animate-pulse opacity-75" size={24} />
+          </div>
+        );
+      case 'speeder':
+        return (
+          <div className="relative">
+            <Ghost className="text-violet-600 animate-bounce absolute" size={24} />
+            <Ghost className="text-purple-400 animate-bounce opacity-75" size={24} />
+          </div>
+        );
+      case 'boss':
+        return (
+          <div className="relative">
+            <Skull className="text-yellow-600 animate-pulse absolute" size={32} />
+            <Skull className="text-orange-400 animate-pulse opacity-75" size={32} />
+          </div>
+        );
+      case 'bomber':
+        return (
+          <div className="relative">
+            <Bomb className="text-orange-600 animate-bounce absolute" size={28} />
+            <Bomb className="text-red-400 animate-bounce opacity-75" size={28} />
+          </div>
+        );
+      case 'elite':
+        return (
+          <div className="relative">
+            <Crown className="text-cyan-500 animate-pulse absolute" size={28} />
+            <Crown className="text-blue-400 animate-pulse opacity-75" size={28} />
+          </div>
+        );
+    }
+  };
+
+  const MemoizedEnemy = memo(({ enemy }: { enemy: Enemy }) => (
+    <div
+      className={`absolute ${
+        enemy.type === 'scout' ? 'drop-shadow-[0_0_10px_rgba(239,68,68,0.5)]' :
+        enemy.type === 'speeder' ? 'drop-shadow-[0_0_10px_rgba(147,51,234,0.5)]' :
+        enemy.type === 'boss' ? 'drop-shadow-[0_0_15px_rgba(234,179,8,0.5)]' :
+        enemy.type === 'bomber' ? 'drop-shadow-[0_0_10px_rgba(249,115,22,0.5)]' :
+        'drop-shadow-[0_0_10px_rgba(59,130,246,0.5)]'
+      }`}
+      style={{
+        left: `${enemy.x}%`,
+        top: `${enemy.y}%`,
+        transform: 'translate(-50%, -50%)'
+      }}
+    >
+      {getEnemyIcon(enemy.type)}
+      {enemy.health > 1 && (
+        <div className="absolute -top-2 left-1/2 transform -translate-x-1/2">
+          <div className="relative">
+            <div className="px-2 py-0.5 bg-gray-900/90 rounded text-xs font-bold" style={{
+              color: enemy.type === 'scout' ? '#ef4444' :
+                     enemy.type === 'speeder' ? '#a855f7' :
+                     enemy.type === 'boss' ? '#eab308' :
+                     enemy.type === 'bomber' ? '#f97316' :
+                     '#3b82f6'
+            }}>
+              {enemy.health}
+            </div>
+            <div className="absolute inset-0 animate-ping opacity-50 px-2 py-0.5 bg-gray-900/50 rounded" />
+          </div>
+        </div>
+      )}
+    </div>
+  ));
+
+  const MemoizedBullet = memo(({ bullet }: { bullet: Bullet }) => (
+    <div
+      className="absolute w-1 h-3 bg-yellow-400"
+      style={{
+        left: `${bullet.x}%`,
+        top: `${bullet.y}%`,
+        transform: 'translate(-50%, -50%)'
+      }}
+    />
+  ));
+
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    const powerUpInterval = setInterval(() => {
+      if (Math.random() < 0.05) { // 5% 概率生成道具
+        const types: PowerUp['type'][] = ['health', 'damage', 'speed', 'shield', 'bomb'];
+        const randomType = types[Math.floor(Math.random() * types.length)];
+        
+        setPowerUps(prev => [...prev, {
+          id: `powerup-${Date.now()}-${Math.random()}`,
+          type: randomType,
+          x: Math.random() * 90,
+          y: -10,
+          duration: randomType === 'shield' ? 10000 : // 护盾持续10秒
+                   randomType === 'damage' ? 8000 : // 伤害加成持续8秒
+                   randomType === 'speed' ? 5000 : // 速度加成持续5秒
+                   undefined // health 和 bomb 是即时效果
+        }]);
+      }
+    }, 2000);
+
+    return () => clearInterval(powerUpInterval);
+  }, [gameState]);
+
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    const powerUpLoop = setInterval(() => {
+      setPowerUps(prev => {
+        const newPowerUps = prev.map(powerUp => ({
+          ...powerUp,
+          y: powerUp.y + 1
+        })).filter(powerUp => powerUp.y < 100);
+
+        // 检测与玩家的碰撞
+        return newPowerUps.filter(powerUp => {
+          const collision = Math.abs(powerUp.x - playerPosition.x) < 5 && 
+                          Math.abs(powerUp.y - playerPosition.y) < 5;
+          
+          if (collision) {
+            handlePowerUpCollect(powerUp);
+            return false;
+          }
+          return true;
+        });
+      });
+    }, 50);
+
+    return () => clearInterval(powerUpLoop);
+  }, [gameState, playerPosition]);
+
+  const handlePowerUpCollect = (powerUp: PowerUp) => {
+    switch (powerUp.type) {
+      case 'health':
+        setPlayerStats(prev => ({
+          ...prev,
+          health: Math.min(prev.maxHealth, prev.health + 2)
+        }));
+        break;
+      case 'damage':
+        setActiveEffects(prev => ({ ...prev, damage: prev.damage + 1 }));
+        setTimeout(() => {
+          setActiveEffects(prev => ({ ...prev, damage: Math.max(0, prev.damage - 1) }));
+        }, powerUp.duration);
+        break;
+      case 'speed':
+        setActiveEffects(prev => ({ ...prev, speed: prev.speed + 2 }));
+        setTimeout(() => {
+          setActiveEffects(prev => ({ ...prev, speed: Math.max(0, prev.speed - 2) }));
+        }, powerUp.duration);
+        break;
+      case 'shield':
+        setActiveEffects(prev => ({ ...prev, shield: true }));
+        setTimeout(() => {
+          setActiveEffects(prev => ({ ...prev, shield: false }));
+        }, powerUp.duration);
+        break;
+      case 'bomb':
+        // 清除屏幕上所有敌人和子弹
+        setEnemies([]);
+        setEnemyBullets([]);
+        break;
     }
   };
 
@@ -629,13 +952,28 @@ export default function Game() {
       </div>
       
       {gameState === 'gameover' ? (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="text-red-500 text-4xl mb-4">{t.gameOver.title}</div>
-          <div className="text-white text-2xl mb-4">{t.gameOver.finalScore}: {score}</div>
-          <div className="text-white text-xl mb-8">{t.gameOver.level}: {level}</div>
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm animate-[fadeIn_0.5s_ease-in-out]">
+          <div className="text-red-500 text-4xl mb-4 animate-[bounceIn_0.5s_ease-in-out]">
+            {t.gameOver.title}
+          </div>
+          {gameOverReason && (
+            <div className="text-yellow-500 text-xl mb-6 animate-[bounceIn_0.5s_ease-in-out_0.1s]">
+              {t.gameOver.reasons[gameOverReason]}
+            </div>
+          )}
+          <div className="text-white text-2xl mb-4 animate-[slideIn_0.5s_ease-in-out_0.2s]">
+            {t.gameOver.finalScore}: {score}
+          </div>
+          <div className="text-white text-xl mb-8 animate-[slideIn_0.5s_ease-in-out_0.4s]">
+            {t.gameOver.level}: {level}
+          </div>
           <button
-            onClick={startGame}
-            className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition transform hover:scale-105"
+            onClick={() => {
+              setGameOverReason(null);
+              startGame();
+            }}
+            className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 
+                      transition transform hover:scale-105 animate-[fadeIn_0.5s_ease-in-out_0.6s]"
           >
             {t.gameOver.restart}
           </button>
@@ -643,35 +981,39 @@ export default function Game() {
       ) : (
         <>
           <div
-            className="absolute text-blue-500"
+            className={`absolute ${isHurt ? 'animate-[hurt_0.2s_ease-in-out]' : 'animate-pulse'}`}
             style={{
               left: `${playerPosition.x}%`,
               top: `${playerPosition.y}%`,
               transform: 'translate(-50%, -50%)'
             }}
           >
-            <Rocket size={32} className="animate-pulse" />
+            <Rocket 
+              size={32} 
+              className={`${
+                isHurt ? 'text-red-500' : 
+                activeEffects.shield ? 'text-blue-400' : 
+                'text-blue-500'
+              }`} 
+            />
+            {isHurt && (
+              <div className="absolute inset-0 animate-ping">
+                <Rocket size={32} className="text-red-500 opacity-50" />
+              </div>
+            )}
           </div>
 
           {bullets.map(bullet => (
-            <div
-              key={bullet.id}
-              className="absolute w-1 h-3 bg-yellow-400 rounded-full shadow-lg shadow-yellow-400/50 animate-pulse"
-              style={{
-                left: `${bullet.x}%`,
-                top: `${bullet.y}%`,
-                transform: 'translate(-50%, -50%)'
-              }}
-            />
+            <MemoizedBullet key={bullet.id} bullet={bullet} />
           ))}
 
           {enemyBullets.map(bullet => (
             <div
               key={bullet.id}
-              className={`absolute w-1 h-3 rounded-full shadow-lg ${
-                bullet.type === 'normal' ? 'bg-red-400 shadow-red-400/50' :
-                bullet.type === 'explosive' ? 'bg-orange-400 shadow-orange-400/50' :
-                'bg-purple-400 shadow-purple-400/50'
+              className={`absolute w-1.5 h-4 rounded-full ${
+                bullet.type === 'normal' ? 'bg-gradient-to-b from-red-500 to-red-600 shadow-[0_0_10px_rgba(239,68,68,0.7)]' :
+                bullet.type === 'explosive' ? 'bg-gradient-to-b from-orange-500 to-orange-600 shadow-[0_0_10px_rgba(249,115,22,0.7)]' :
+                'bg-gradient-to-b from-purple-500 to-purple-600 shadow-[0_0_10px_rgba(147,51,234,0.7)]'
               } ${bullet.type === 'explosive' ? 'animate-ping' : 'animate-pulse'}`}
               style={{
                 left: `${bullet.x}%`,
@@ -682,31 +1024,73 @@ export default function Game() {
           ))}
 
           {enemies.map(enemy => (
+            <MemoizedEnemy key={enemy.id} enemy={enemy} />
+          ))}
+
+          {powerUps.map(powerUp => (
             <div
-              key={enemy.id}
-              className={`absolute ${
-                enemy.type === 'scout' ? 'text-red-500' :
-                enemy.type === 'speeder' ? 'text-purple-500' :
-                enemy.type === 'boss' ? 'text-yellow-500' :
-                enemy.type === 'bomber' ? 'text-orange-500' :
-                'text-blue-500'
+              key={powerUp.id}
+              className={`absolute w-6 h-6 ${
+                powerUp.type === 'health' ? 'text-red-500' :
+                powerUp.type === 'damage' ? 'text-yellow-500' :
+                powerUp.type === 'speed' ? 'text-green-500' :
+                powerUp.type === 'shield' ? 'text-blue-500' :
+                'text-purple-500'
               }`}
               style={{
-                left: `${enemy.x}%`,
-                top: `${enemy.y}%`,
+                left: `${powerUp.x}%`,
+                top: `${powerUp.y}%`,
                 transform: 'translate(-50%, -50%)'
               }}
             >
-              {getEnemyIcon(enemy.type)}
-              {enemy.health > 1 && (
-                <div className="absolute -top-2 left-1/2 transform -translate-x-1/2 text-xs text-white bg-gray-800/70 px-1 rounded">
-                  {enemy.health}
-                </div>
-              )}
+              {powerUp.type === 'health' ? <Heart /> :
+               powerUp.type === 'damage' ? <Zap /> :
+               powerUp.type === 'speed' ? <Wind /> :
+               powerUp.type === 'shield' ? <Shield /> :
+               <Bomb />}
             </div>
           ))}
+
+          {activeEffects.shield && (
+            <div className="absolute w-12 h-12 text-blue-500 opacity-50 animate-pulse"
+              style={{
+                left: `${playerPosition.x}%`,
+                top: `${playerPosition.y}%`,
+                transform: 'translate(-50%, -50%)'
+              }}>
+              <Shield size={48} />
+            </div>
+          )}
         </>
       )}
     </div>
   );
 }
+
+// 碰撞检测函数优化
+const checkCollision = (bullet: Bullet, enemy: Enemy) => {
+  const bulletRect = {
+    left: bullet.x - 0.5,
+    right: bullet.x + 0.5,
+    top: bullet.y - 1.5,
+    bottom: bullet.y + 1.5
+  };
+  
+  const enemyRect = {
+    left: enemy.x - 2,
+    right: enemy.x + 2,
+    top: enemy.y - 2,
+    bottom: enemy.y + 2
+  };
+  
+  return !(
+    bulletRect.right < enemyRect.left ||
+    bulletRect.left > enemyRect.right ||
+    bulletRect.bottom < enemyRect.top ||
+    bulletRect.top > enemyRect.bottom
+  );
+};
+
+const generateBulletId = () => {
+  return `bullet-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+};
