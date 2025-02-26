@@ -166,6 +166,8 @@ export default function Game() {
     health: 10,
     maxHealth: 10,
   });
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
+  const [isShooting, setIsShooting] = useState(false);
 
   const movePlayer = useCallback((e: KeyboardEvent) => {
     if (gameState !== 'playing') return;
@@ -199,10 +201,49 @@ export default function Game() {
     }
   }, [bulletId, gameState, lastShot, playerPosition.x, playerPosition.y, playerStats]);
 
+  const handleTouchStart = useCallback((e: TouchEvent) => {
+    if (gameState !== 'playing') return;
+    
+    const touch = e.touches[0];
+    setTouchStartX(touch.clientX);
+    
+    // 开始连续射击
+    setIsShooting(true);
+  }, [gameState]);
+
+  const handleTouchMove = useCallback((e: TouchEvent) => {
+    if (gameState !== 'playing' || touchStartX === null) return;
+    
+    const touch = e.touches[0];
+    const moveX = touch.clientX - touchStartX;
+    const sensitivity = window.innerWidth / 100; // 将屏幕宽度划分为100份
+    
+    setPlayerPosition(prev => {
+      const newX = Math.max(0, Math.min(90, prev.x + (moveX / sensitivity)));
+      return { ...prev, x: newX };
+    });
+    
+    setTouchStartX(touch.clientX);
+  }, [gameState, touchStartX]);
+
+  const handleTouchEnd = useCallback(() => {
+    setTouchStartX(null);
+    setIsShooting(false);
+  }, []);
+
   useEffect(() => {
     window.addEventListener('keydown', movePlayer);
-    return () => window.removeEventListener('keydown', movePlayer);
-  }, [movePlayer]);
+    window.addEventListener('touchstart', handleTouchStart);
+    window.addEventListener('touchmove', handleTouchMove);
+    window.addEventListener('touchend', handleTouchEnd);
+    
+    return () => {
+      window.removeEventListener('keydown', movePlayer);
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [movePlayer, handleTouchStart, handleTouchMove, handleTouchEnd]);
 
   useEffect(() => {
     if (gameState !== 'playing') return;
@@ -412,6 +453,26 @@ export default function Game() {
 
     return () => clearInterval(gameLoop);
   }, [enemyId, gameState, level, playerPosition.x, playerPosition.y]);
+
+  useEffect(() => {
+    if (!isShooting || gameState !== 'playing') return;
+    
+    const shootingInterval = setInterval(() => {
+      const now = Date.now();
+      if (now - lastShot >= playerStats.fireRate) {
+        setBullets(prev => [...prev, { 
+          id: bulletId, 
+          x: playerPosition.x + 2, 
+          y: playerPosition.y,
+          damage: playerStats.damage
+        }]);
+        setBulletId(prev => prev + 1);
+        setLastShot(now);
+      }
+    }, 50);
+    
+    return () => clearInterval(shootingInterval);
+  }, [isShooting, gameState, lastShot, bulletId, playerPosition.x, playerPosition.y, playerStats]);
 
   const startGame = () => {
     setGameState('playing');

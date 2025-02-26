@@ -12,9 +12,14 @@ A modern space shooter game built with React and TypeScript, featuring multiple 
 
 ### Controls 🎮 控制方式
 
+Desktop | 桌面端:
 - Arrow Left/Right (←/→): Move ship | 移动飞船
 - Spacebar: Shoot | 发射子弹
 - L: Switch language | 切换语言
+
+Mobile | 移动端:
+- Slide finger: Move ship | 滑动手指移动飞船
+- Touch screen: Auto-shoot | 触摸屏幕自动射击
 
 ### Enemy Types 👾 敌人类型
 
