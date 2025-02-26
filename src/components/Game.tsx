@@ -246,10 +246,13 @@ export default function Game() {
     const rect = (e.target as HTMLElement).getBoundingClientRect();
     const x = ((touch.clientX - rect.left) / rect.width) * 100;
     
-    setPlayerPosition(prev => ({
-      ...prev,
-      x: Math.max(0, Math.min(90, x))
-    }));
+    // 使用 requestAnimationFrame 优化性能
+    requestAnimationFrame(() => {
+      setPlayerPosition(prev => ({
+        ...prev,
+        x: Math.max(0, Math.min(90, x))
+      }));
+    });
   }, [gameState]);
 
   const handleTouchEnd = useCallback(() => {
@@ -257,37 +260,39 @@ export default function Game() {
     setIsShooting(false);
   }, []);
 
-  const debouncedTouchMove = useMemo(
-    () => debounce((e: TouchEvent) => {
-      if (gameState !== 'playing') return;
-      
-      const touch = e.touches[0];
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
-      const x = ((touch.clientX - rect.left) / rect.width) * 100;
-      
-      setPlayerPosition(prev => ({
-        ...prev,
-        x: Math.max(0, Math.min(90, x))
-      }));
-    }, 16), // 约60fps
-    [gameState]
-  );
+  useEffect(() => {
+    // 阻止默认的触摸行为
+    const preventDefault = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    // 添加触摸事件监听器，设置 passive: false 来允许阻止默认行为
+    document.addEventListener('touchstart', preventDefault, { passive: false });
+    document.addEventListener('touchmove', preventDefault, { passive: false });
+    document.addEventListener('touchend', preventDefault, { passive: false });
+    
+    // 清理函数
+    return () => {
+      document.removeEventListener('touchstart', preventDefault);
+      document.removeEventListener('touchmove', preventDefault);
+      document.removeEventListener('touchend', preventDefault);
+    };
+  }, []);
 
   useEffect(() => {
     window.addEventListener('keydown', movePlayer);
     window.addEventListener('touchstart', handleTouchStart);
     window.addEventListener('touchmove', handleTouchMove);
     window.addEventListener('touchend', handleTouchEnd);
-    document.addEventListener('touchmove', debouncedTouchMove);
     
     return () => {
       window.removeEventListener('keydown', movePlayer);
       window.removeEventListener('touchstart', handleTouchStart);
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleTouchEnd);
-      document.removeEventListener('touchmove', debouncedTouchMove);
     };
-  }, [movePlayer, handleTouchStart, handleTouchMove, handleTouchEnd, debouncedTouchMove]);
+  }, [movePlayer, handleTouchStart, handleTouchMove, handleTouchEnd]);
 
   useEffect(() => {
     if (gameState !== 'playing') return;
@@ -892,7 +897,10 @@ export default function Game() {
   }
 
   return (
-    <div className="relative w-full h-screen bg-gradient-to-b from-gray-900 via-blue-900 to-black overflow-hidden">
+    <div 
+      className="relative w-full h-screen bg-gradient-to-b from-gray-900 via-blue-900 to-black overflow-hidden touch-none select-none"
+      style={{ WebkitTouchCallout: 'none' }}
+    >
       <div className="absolute top-4 left-4 text-white space-y-2 bg-gray-800/50 p-4 rounded-lg backdrop-blur-sm">
         <div className="text-xl">{t.stats.score}: {score}</div>
         <div className="text-xl">{t.stats.level}: {level}</div>
