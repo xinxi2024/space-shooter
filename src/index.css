@@ -31,3 +31,16 @@ body {
 * {
   -webkit-tap-highlight-color: transparent;
 }
+
+.game-container {
+  touch-action: none;
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 只在游戏运行时应用这些样式 */
+.game-container.playing {
+  touch-action: none;
+  pointer-events: auto;
+}
